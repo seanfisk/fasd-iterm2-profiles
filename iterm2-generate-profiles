@@ -1,0 +1,59 @@
+#!/usr/bin/python
+
+# Python 2.7 syntax
+
+from __future__ import (
+    absolute_import, division, print_function, unicode_literals)
+import argparse
+import sys
+import os
+import json
+import errno
+import uuid
+
+arg_parser = argparse.ArgumentParser(
+    description='Generate iTerm2 Dynamic Profiles for specific directories.')
+arg_parser.add_argument(
+    '-p', '--profile-path',
+    help='path to iTerm2 dynamic profile [default: %(default)s]',
+    default=os.path.expanduser(
+        '~/Library/Application Support/iTerm2/DynamicProfiles/Directories.json'
+    ))
+arg_parser.add_argument(
+    'paths_file', default=sys.stdin, type=argparse.FileType('r'), nargs='?',
+    help='file containing newline-separated paths [default: stdin]')
+args = arg_parser.parse_args()
+
+# Update the listed profiles if possible, identifying by the profile name.
+# This avoids unnecessarily changing the GUIDs.
+#
+# I'm not sure if this is necessary, or an advantage, or just totally
+# superfluous. But it seems best to avoid generating new GUIDs every time.
+old_profiles = {}
+try:
+    with open(args.profile_path, 'r') as profile_file:
+        old_profiles_obj = json.load(profile_file)
+except IOError as exc:
+    if exc.errno != errno.ENOENT:
+        raise
+else:
+    for profile in old_profiles_obj['Profiles']:
+        old_profiles[profile['Name']] = profile
+
+new_profiles = {}
+with args.paths_file:
+    for line in args.paths_file:
+        path = line.rstrip()
+        name = '/' if path == '/' else os.path.basename(path)
+        try:
+            profile = old_profiles[name]
+        except KeyError:
+            profile = dict(Guid=str(uuid.uuid4()), Name=name)
+        profile['Dynamic Profile Parent Name'] = 'Personal'
+        profile['Working Directory'] = path
+        profile['Custom Directory'] = 'Yes'
+        new_profiles[name] = profile
+
+with open(args.profile_path, 'w') as profile_file:
+    json.dump(dict(Profiles=new_profiles.values()), profile_file,
+              indent=2, separators=(',', ': '))

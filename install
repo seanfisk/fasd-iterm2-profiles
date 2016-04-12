@@ -1,0 +1,78 @@
+#!/usr/bin/python
+
+# Python 2.7 syntax
+
+from __future__ import print_function
+import argparse
+import os
+import sys
+from plistlib import writePlist
+from collections import OrderedDict
+import shutil
+import errno
+from distutils.spawn import find_executable
+
+def yes_no(message):
+    while True:
+        response = raw_input('{} (y/n) [y]: '.format(message))
+        if response in ('y', 'n', ''):
+            return response != 'n'
+        print('Please answer y or n.')
+
+def copy_with_mode(src, dst):
+    shutil.copyfile(src, dst)
+    shutil.copymode(src, dst)
+
+arg_parser = argparse.ArgumentParser(
+    description='fasd/iTerm2 profile generation installer')
+arg_parser.add_argument(
+    '-n', '--num-dirs', type=int, default=50,
+    help='number of directories to add [default: %(default)s]')
+args = arg_parser.parse_args()
+
+DOMAIN = 'com.seanfisk.iterm2-profiles'
+PLIST_INSTALL_PATH = os.path.expanduser(
+    '~/Library/LaunchAgents/{}.plist'.format(DOMAIN))
+LOGFILE_PATH = os.path.expanduser('~/Library/Logs/{}.log'.format(DOMAIN))
+EXE_INSTALL_DIR = os.path.expanduser('~/bin')
+FASD_PATH = find_executable('fasd')
+if FASD_PATH is None:
+    sys.exit('fasd executable not found on PATH')
+
+print('Plist will be installed to:', PLIST_INSTALL_PATH)
+print('Executables will be installed to:', EXE_INSTALL_DIR)
+print('Log will be written to:', LOGFILE_PATH)
+print()
+
+if not yes_no('Is this ok?'):
+    sys.exit('Exiting without installing.')
+
+try:
+    os.makedirs(EXE_INSTALL_DIR)
+except OSError as exc:
+    if exc.errno != errno.EEXIST:
+        raise
+for name in ['fasd-iterm2-generate-profiles', 'iterm2-generate-profiles']:
+    copy_with_mode(name, os.path.join(EXE_INSTALL_DIR, name))
+writePlist(
+    OrderedDict([
+        ('Label', DOMAIN),
+        ('ProgramArguments', [
+            os.path.join(EXE_INSTALL_DIR, 'fasd-iterm2-generate-profiles'),
+            '--num-dir', str(args.num_dirs)]),
+        ('StartCalendarInterval', dict(Hour=0)),
+        ('StandardOutPath', LOGFILE_PATH),
+        ('StandardErrorPath', LOGFILE_PATH),
+        ('EnvironmentVariables', dict(
+            PATH=':'.join([
+                EXE_INSTALL_DIR,
+                os.path.dirname(FASD_PATH),
+                '/usr/bin', '/bin', # fasd uses commands from these directories
+            ]),
+            HOME=os.path.expanduser('~'),
+        )),
+    ]),
+    PLIST_INSTALL_PATH)
+os.chmod(PLIST_INSTALL_PATH, 0o644)
+
+print('Install successful.')

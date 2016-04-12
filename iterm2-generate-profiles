@@ -10,6 +10,7 @@ import os
 import json
 import errno
 import uuid
+import logging
 
 arg_parser = argparse.ArgumentParser(
     description='Generate iTerm2 Dynamic Profiles for specific directories.')
@@ -24,6 +25,9 @@ arg_parser.add_argument(
     help='file containing newline-separated paths [default: stdin]')
 args = arg_parser.parse_args()
 
+logging.basicConfig(
+    level=logging.DEBUG, format='[%(asctime)s] %(levelname)s %(message)s')
+
 # Update the listed profiles if possible, identifying by the profile name.
 # This avoids unnecessarily changing the GUIDs.
 #
@@ -32,16 +36,20 @@ args = arg_parser.parse_args()
 old_profiles = {}
 try:
     with open(args.profile_path, 'r') as profile_file:
+        logging.debug('Reading existing profiles: %s', profile_file.name)
         old_profiles_obj = json.load(profile_file)
 except IOError as exc:
     if exc.errno != errno.ENOENT:
         raise
+    logging.debug('Existing profiles not found: %s', args.profile_path)
+    logging.debug('Creating new profiles')
 else:
     for profile in old_profiles_obj['Profiles']:
         old_profiles[profile['Name']] = profile
 
 new_profiles = {}
 with args.paths_file:
+    count = 0
     for line in args.paths_file:
         path = line.rstrip()
         name = '/' if path == '/' else os.path.basename(path)
@@ -53,7 +61,10 @@ with args.paths_file:
         profile['Working Directory'] = path
         profile['Custom Directory'] = 'Yes'
         new_profiles[name] = profile
+        count += 1
+    logging.debug('%d profiles updated', count)
 
 with open(args.profile_path, 'w') as profile_file:
     json.dump(dict(Profiles=new_profiles.values()), profile_file,
               indent=2, separators=(',', ': '))
+    logging.debug('Profiles written: %s', profile_file.name)

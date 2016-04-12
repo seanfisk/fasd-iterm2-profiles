@@ -1,0 +1,52 @@
+#!/usr/bin/python
+
+from __future__ import print_function
+import argparse
+import subprocess
+import sys
+
+def print_command_failure(proc):
+    print('Command failed with status {}: {}'.format(
+        proc.returncode, proc.args), file=sys.stderr)
+
+arg_parser = argparse.ArgumentParser(
+    description='Generate iTerm2 profiles via fasd.')
+arg_parser.add_argument(
+    '-n', '--num-dirs', type=int, default=50,
+    help='number of directories to add [default: %(default)s]')
+args = arg_parser.parse_args()
+
+devnull = open('/dev/null', 'wb')
+fasd_args = [
+    'fasd',
+    '-l', # list paths without scores
+    '-d', # match directories only
+    '-R', # reverse listing order
+]
+fasd_proc = subprocess.Popen(
+    fasd_args, stdout=subprocess.PIPE, stderr=devnull, universal_newlines=True)
+fasd_proc.args = fasd_args # Emulate Python 3
+gen_args = ['iterm2-generate-profiles']
+gen_proc = subprocess.Popen(
+    gen_args, universal_newlines=True, stdin=subprocess.PIPE)
+gen_proc.args = gen_args # Ditto
+with fasd_proc.stdout, gen_proc.stdin:
+    # XXX This doesn't work completely as intended, since
+    # iterm2-generate-profiles doesn't close stdin when the command-line
+    # arguments are incorrect (an error, in my opinion).
+    gen_ret = gen_proc.poll()
+    if gen_ret is not None and gen_ret != 0:
+        print_command_failure(gen_proc)
+        sys.exit(1)
+    i = 0
+    for line in fasd_proc.stdout:
+        gen_proc.stdin.write(line)
+        i += 1
+        if i >= args.num_dirs:
+            break
+exit_code = 0
+for proc in [fasd_proc, gen_proc]:
+    ret = proc.wait()
+    if ret != 0:
+        exit_code = 1
+sys.exit(exit_code)

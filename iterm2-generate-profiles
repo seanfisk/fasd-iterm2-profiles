@@ -20,13 +20,83 @@ arg_parser.add_argument(
     ))
 arg_parser.add_argument(
     'paths_file', default=sys.stdin, type=argparse.FileType('r'), nargs='?',
-    help='file containing newline-separated paths [default: stdin]')
+    help='file containing newline-separated absolute paths [default: stdin]')
 args = arg_parser.parse_args()
 
 logging.basicConfig(
     level=logging.DEBUG, format='[%(asctime)s] %(levelname)s %(message)s')
 
-# Update the listed profiles if possible, identifying by the profile name.
+class TrieNode(object):
+    def __init__(self):
+        self.children = {} # Component (str) to node (Node) mapping of children
+        self.unique = True # Whether this node has any descendants
+        # self.value will be set later if it has one
+
+class Trie(object):
+    def __init__(self):
+        self._root = TrieNode()
+
+    def __setitem__(self, components, value):
+        current = self._root
+        for component in components:
+            try:
+                current = current.children[component]
+            except KeyError:
+                current.children[component] = current = TrieNode()
+            else:
+                current.unique = False
+        current.value = value
+
+    def _recurse_nodes(self, components, node):
+        # Yield if this node has a value
+        try:
+            value = node.value
+        except AttributeError:
+            pass
+        else:
+            yield (components, value)
+        # Yield descendants
+        for component, child_node in node.children.iteritems():
+            next_components = (components if node.unique
+                               else ([component] + components))
+            for item in self._recurse_nodes(next_components, child_node):
+                yield item
+
+    def _generate_nodes(self):
+        # We can't simple recurse here because we need the returned items to
+        # contain at least one component.
+        for component, node in self._root.children.iteritems():
+            for item in self._recurse_nodes([component], node):
+                yield item
+
+    def __iter__(self):
+        return iter(self._generate_nodes())
+
+class PathTrie(Trie):
+    def _split_path(self, path):
+        """Returns reversed components of the given path."""
+        components = []
+        while True:
+            head, tail = os.path.split(path)
+            if tail == '':
+                components.append(head)
+                break
+            components.append(tail)
+            path = head
+        return components
+
+    def __setitem__(self, path, value):
+        # Though we're using os.sep, we only support Unix-style absolute paths
+        # with no drive or anything like that.
+        if not path.startswith(os.sep):
+            raise ValueError('Path must be absolute: {}'.format(path))
+        super(PathTrie, self).__setitem__(self._split_path(path), value)
+
+    def __iter__(self):
+        return iter((os.path.join(*components), value) for components, value
+                    in super(PathTrie, self).__iter__())
+
+# Update the listed profiles if possible, identifying by the path.
 # This avoids unnecessarily changing the GUIDs.
 #
 # I'm not sure if this is necessary, or an advantage, or just totally
@@ -43,26 +113,35 @@ except IOError as exc:
     logging.debug('Creating new profiles')
 else:
     for profile in old_profiles_obj['Profiles']:
-        old_profiles[profile['Name']] = profile
+        try:
+            key = profile['Working Directory']
+        except KeyError:
+            pass # Ignore profiles with no Working Directory set
+        else:
+            old_profiles[key] = profile
 
-new_profiles = {}
 with args.paths_file:
-    count = 0
+    trie = PathTrie()
     for line in args.paths_file:
         path = line.rstrip()
-        name = '/' if path == '/' else os.path.basename(path)
         try:
-            profile = old_profiles[name]
+            profile = old_profiles[path]
         except KeyError:
-            profile = dict(Guid=str(uuid.uuid4()), Name=name)
-        profile['Dynamic Profile Parent Name'] = 'Personal'
-        profile['Working Directory'] = path
-        profile['Custom Directory'] = 'Yes'
-        new_profiles[name] = profile
-        count += 1
-    logging.debug('%d profiles updated', count)
+            profile = dict(Guid=str(uuid.uuid4()))
+        profile.update({
+            'Dynamic Profile Parent Name': 'Personal',
+            'Working Directory': path,
+            'Custom Directory': 'Yes',
+        })
+        trie[path] = profile
+
+    new_profiles = []
+    for name, profile in trie:
+        profile['Name'] = name # Update with minimal name
+        new_profiles.append(profile)
+    logging.debug('%d profiles updated', len(new_profiles))
 
 with open(args.profile_path, 'w') as profile_file:
-    json.dump(dict(Profiles=new_profiles.values()), profile_file,
+    json.dump(dict(Profiles=new_profiles), profile_file,
               indent=2, separators=(',', ': '))
     logging.debug('Profiles written: %s', profile_file.name)
